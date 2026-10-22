@@ -68,4 +68,36 @@ namespace NguyenHuuDung_0299.Models.Academic
 
         public string? Note { get; set; }
     }
+
+    public sealed class UpdateStudentRequest
+    {
+        [Required, StringLength(150)]
+        public required string FullName { get; set; }
+
+        [Required, EmailAddress]
+        public required string Email { get; set; }
+
+        public string? PhoneNumber { get; set; }
+        public string? Faculty { get; set; }
+        public string? Major { get; set; }
+        public int? EnrollmentYear { get; set; }
+        public string? AvatarUrl { get; set; }
+        public bool? IsActive { get; set; }
+    }
+
+    public sealed class UpdateLecturerRequest
+    {
+        [Required, StringLength(150)]
+        public required string FullName { get; set; }
+
+        [Required, EmailAddress]
+        public required string Email { get; set; }
+
+        public string? PhoneNumber { get; set; }
+
+        [Required]
+        public required string Department { get; set; }
+
+        public bool? IsActive { get; set; }
+    }
 }

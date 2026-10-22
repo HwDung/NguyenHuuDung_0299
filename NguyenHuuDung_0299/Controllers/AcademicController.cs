@@ -140,6 +140,131 @@ public class AcademicController(AppDbContext db) : ControllerBase
         });
     }
 
+    [Authorize(Roles = "Admin,Lecturer")]
+    [HttpGet("lecturers/{id}")]
+    public async Task<IActionResult> GetLecturerById(string id, CancellationToken ct)
+    {
+        var cleanId = id.Trim();
+        var lecturer = await db.Lecturers
+            .Include(x => x.User)
+            .Include(x => x.CourseClasses).ThenInclude(c => c.Subject)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(l => l.UserId.ToString() == cleanId || l.LecturerCode.ToUpper() == cleanId.ToUpper(), ct);
+
+        if (lecturer == null) return NotFound("Giảng viên không tồn tại.");
+
+        return Ok(new
+        {
+            lecturer.UserId,
+            lecturer.LecturerCode,
+            lecturer.Department,
+            lecturer.User.UserName,
+            lecturer.User.Email,
+            lecturer.User.FullName,
+            lecturer.User.PhoneNumber,
+            lecturer.User.IsActive,
+            courseClasses = lecturer.CourseClasses.Select(c => new
+            {
+                c.Id,
+                c.Code,
+                c.Semester,
+                c.AcademicYear,
+                c.Capacity,
+                subject = new { c.Subject.Id, c.Subject.Code, c.Subject.Name }
+            })
+        });
+    }
+
+    [Authorize(Roles = "Admin")]
+    [HttpPut("lecturers/{id}")]
+    public async Task<IActionResult> UpdateLecturer(
+        string id,
+        UpdateLecturerRequest request,
+        [FromServices] UserManager<User> userManager,
+        CancellationToken ct)
+    {
+        var cleanId = id.Trim();
+        var lecturer = await db.Lecturers
+            .Include(x => x.User)
+            .FirstOrDefaultAsync(l => l.UserId.ToString() == cleanId || l.LecturerCode.ToUpper() == cleanId.ToUpper(), ct);
+
+        if (lecturer == null) return NotFound("Giảng viên không tồn tại.");
+
+        var user = lecturer.User;
+        var newEmail = request.Email.Trim().ToLowerInvariant();
+
+        if (user.Email != newEmail)
+        {
+            var existing = await userManager.FindByEmailAsync(newEmail);
+            if (existing != null && existing.Id != user.Id)
+            {
+                return Conflict("Email này đã được sử dụng bởi tài khoản khác.");
+            }
+            user.Email = newEmail;
+            user.UserName = newEmail;
+        }
+
+        user.FullName = request.FullName.Trim();
+        user.PhoneNumber = request.PhoneNumber;
+        if (request.IsActive.HasValue)
+        {
+            user.IsActive = request.IsActive.Value;
+        }
+
+        lecturer.Department = request.Department.Trim();
+
+        await userManager.UpdateAsync(user);
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            message = "Cập nhật thông tin giảng viên thành công.",
+            userId = lecturer.UserId,
+            lecturerCode = lecturer.LecturerCode,
+            fullName = user.FullName,
+            email = user.Email,
+            phoneNumber = user.PhoneNumber,
+            department = lecturer.Department,
+            isActive = user.IsActive
+        });
+    }
+
+    [Authorize(Roles = "Admin")]
+    [HttpDelete("lecturers/{id}")]
+    public async Task<IActionResult> DeleteLecturer(
+        string id,
+        [FromServices] UserManager<User> userManager,
+        CancellationToken ct)
+    {
+        var cleanId = id.Trim();
+        var lecturer = await db.Lecturers
+            .Include(x => x.User)
+            .FirstOrDefaultAsync(l => l.UserId.ToString() == cleanId || l.LecturerCode.ToUpper() == cleanId.ToUpper(), ct);
+
+        if (lecturer == null) return NotFound("Giảng viên không tồn tại.");
+
+        var assignedClasses = await db.CourseClasses
+            .Where(c => c.LecturerId == lecturer.UserId)
+            .Select(c => c.Code)
+            .ToListAsync(ct);
+
+        if (assignedClasses.Count > 0)
+        {
+            return BadRequest($"Không thể xóa giảng viên vì đang phụ trách các lớp: {string.Join(", ", assignedClasses)}. Vui lòng phân công lại lớp trước khi xóa.");
+        }
+
+        var user = lecturer.User;
+        db.Lecturers.Remove(lecturer);
+        await db.SaveChangesAsync(ct);
+
+        if (user != null)
+        {
+            await userManager.DeleteAsync(user);
+        }
+
+        return Ok(new { message = $"Đã xóa giảng viên {lecturer.LecturerCode} ({user?.FullName}) thành công." });
+    }
+
     #endregion
 
     #region 3. Quản lý Sinh viên (Admin cấp tài khoản & Cập nhật Avatar)
@@ -255,6 +380,148 @@ public class AcademicController(AppDbContext db) : ControllerBase
         return Ok(new { message = "Cập nhật avatar khuôn mặt mẫu thành công.", studentId, avatarUrl = student.AvatarUrl });
     }
 
+    [Authorize(Roles = "Admin,Lecturer,Student")]
+    [HttpGet("students/{id}")]
+    public async Task<IActionResult> GetStudentById(string id, CancellationToken ct)
+    {
+        var cleanId = id.Trim();
+        var student = await db.Students
+            .Include(x => x.User)
+            .Include(x => x.Enrollments).ThenInclude(e => e.CourseClass).ThenInclude(c => c.Subject)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.UserId.ToString() == cleanId || s.StudentCode.ToUpper() == cleanId.ToUpper(), ct);
+
+        if (student == null) return NotFound("Sinh viên không tồn tại.");
+
+        return Ok(new
+        {
+            student.UserId,
+            student.StudentCode,
+            student.Faculty,
+            student.Major,
+            student.EnrollmentYear,
+            student.AvatarUrl,
+            student.User.UserName,
+            student.User.Email,
+            student.User.FullName,
+            student.User.PhoneNumber,
+            student.User.IsActive,
+            enrolledClasses = student.Enrollments.Select(e => new
+            {
+                e.CourseClassId,
+                classCode = e.CourseClass.Code,
+                subjectName = e.CourseClass.Subject.Name,
+                e.Status,
+                e.EnrolledAtUtc
+            })
+        });
+    }
+
+    [Authorize(Roles = "Admin,Student")]
+    [HttpPut("students/{id}")]
+    public async Task<IActionResult> UpdateStudent(
+        string id,
+        UpdateStudentRequest request,
+        [FromServices] UserManager<User> userManager,
+        CancellationToken ct)
+    {
+        var cleanId = id.Trim();
+        var student = await db.Students
+            .Include(x => x.User)
+            .FirstOrDefaultAsync(s => s.UserId.ToString() == cleanId || s.StudentCode.ToUpper() == cleanId.ToUpper(), ct);
+
+        if (student == null) return NotFound("Sinh viên không tồn tại.");
+
+        if (!IsAdmin && CurrentUserId != student.UserId)
+            return Forbid();
+
+        var user = student.User;
+        var newEmail = request.Email.Trim().ToLowerInvariant();
+
+        if (user.Email != newEmail)
+        {
+            var existing = await userManager.FindByEmailAsync(newEmail);
+            if (existing != null && existing.Id != user.Id)
+            {
+                return Conflict("Email này đã được sử dụng bởi tài khoản khác.");
+            }
+            user.Email = newEmail;
+            user.UserName = newEmail;
+        }
+
+        user.FullName = request.FullName.Trim();
+        user.PhoneNumber = request.PhoneNumber;
+
+        if (IsAdmin && request.IsActive.HasValue)
+        {
+            user.IsActive = request.IsActive.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Faculty))
+            student.Faculty = request.Faculty.Trim();
+
+        if (!string.IsNullOrWhiteSpace(request.Major))
+            student.Major = request.Major.Trim();
+
+        if (request.EnrollmentYear.HasValue)
+            student.EnrollmentYear = request.EnrollmentYear.Value;
+
+        if (!string.IsNullOrWhiteSpace(request.AvatarUrl))
+            student.AvatarUrl = request.AvatarUrl;
+
+        await userManager.UpdateAsync(user);
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            message = "Cập nhật thông tin sinh viên thành công.",
+            userId = student.UserId,
+            studentCode = student.StudentCode,
+            fullName = user.FullName,
+            email = user.Email,
+            phoneNumber = user.PhoneNumber,
+            faculty = student.Faculty,
+            major = student.Major,
+            enrollmentYear = student.EnrollmentYear,
+            avatarUrl = student.AvatarUrl,
+            isActive = user.IsActive
+        });
+    }
+
+    [Authorize(Roles = "Admin")]
+    [HttpDelete("students/{id}")]
+    public async Task<IActionResult> DeleteStudent(
+        string id,
+        [FromServices] UserManager<User> userManager,
+        CancellationToken ct)
+    {
+        var cleanId = id.Trim();
+        var student = await db.Students
+            .Include(x => x.User)
+            .FirstOrDefaultAsync(s => s.UserId.ToString() == cleanId || s.StudentCode.ToUpper() == cleanId.ToUpper(), ct);
+
+        if (student == null) return NotFound("Sinh viên không tồn tại.");
+
+        // Xóa các bản ghi điểm danh
+        var attendanceRecords = await db.AttendanceRecords.Where(a => a.StudentId == student.UserId).ToListAsync(ct);
+        db.AttendanceRecords.RemoveRange(attendanceRecords);
+
+        // Xóa các đăng ký học
+        var enrollments = await db.Enrollments.Where(e => e.StudentId == student.UserId).ToListAsync(ct);
+        db.Enrollments.RemoveRange(enrollments);
+
+        var user = student.User;
+        db.Students.Remove(student);
+        await db.SaveChangesAsync(ct);
+
+        if (user != null)
+        {
+            await userManager.DeleteAsync(user);
+        }
+
+        return Ok(new { message = $"Đã xóa sinh viên {student.StudentCode} ({user?.FullName}) thành công." });
+    }
+
     #endregion
 
     #region 4. Môn học (Subjects)
@@ -313,7 +580,39 @@ public class AcademicController(AppDbContext db) : ControllerBase
             query = query.Where(x => x.LecturerId == CurrentUserId);
         }
 
-        return Ok(await query.ToListAsync(ct));
+        var list = await query.Select(x => new
+        {
+            x.Id,
+            x.Code,
+            x.SubjectId,
+            x.LecturerId,
+            x.Semester,
+            x.AcademicYear,
+            x.Capacity,
+            Subject = x.Subject == null ? null : new
+            {
+                x.Subject.Id,
+                x.Subject.Code,
+                x.Subject.Name,
+                x.Subject.Credits,
+                x.Subject.Description,
+                x.Subject.IsActive
+            },
+            Lecturer = x.Lecturer == null ? null : new
+            {
+                x.Lecturer.UserId,
+                x.Lecturer.LecturerCode,
+                x.Lecturer.Department,
+                User = x.Lecturer.User == null ? null : new
+                {
+                    x.Lecturer.User.FullName,
+                    x.Lecturer.User.Email,
+                    x.Lecturer.User.PhoneNumber
+                }
+            }
+        }).ToListAsync(ct);
+
+        return Ok(list);
     }
 
     [HttpGet("course-classes/{id:int}")]
