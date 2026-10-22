@@ -22,7 +22,7 @@ public class AcademicController(AppDbContext db) : ControllerBase
             return Guid.TryParse(claim, out var id) ? id : Guid.Empty;
         }
     }
-    private bool IsAdmin => User.IsInRole("Admin");
+    private bool IsAdmin => User.IsInRole("Admin") || User.HasClaim(ClaimTypes.Role, "Admin") || User.HasClaim("role", "Admin");
 
     #region 1. Khoa & Ngành (Faculties & Majors)
 
@@ -329,11 +329,21 @@ public class AcademicController(AppDbContext db) : ControllerBase
             await roleManager.CreateAsync(new Role { Name = "Student" });
         await userManager.AddToRoleAsync(user, "Student");
 
-        string studentCode;
-        do
+        string studentCode = !string.IsNullOrWhiteSpace(request.StudentCode)
+            ? request.StudentCode.Trim().ToUpperInvariant()
+            : string.Empty;
+
+        if (string.IsNullOrWhiteSpace(studentCode))
         {
-            studentCode = $"SV{RandomNumberGenerator.GetInt32(0, 1_000_000):D6}";
-        } while (await db.Students.AnyAsync(s => s.StudentCode == studentCode, ct));
+            do
+            {
+                studentCode = $"SV{RandomNumberGenerator.GetInt32(0, 1_000_000):D6}";
+            } while (await db.Students.AnyAsync(s => s.StudentCode == studentCode, ct));
+        }
+        else if (await db.Students.AnyAsync(s => s.StudentCode == studentCode, ct))
+        {
+            return Conflict($"Mã sinh viên '{studentCode}' đã tồn tại trong hệ thống.");
+        }
 
         var student = new Student
         {
@@ -343,7 +353,9 @@ public class AcademicController(AppDbContext db) : ControllerBase
             Faculty = request.Faculty ?? string.Empty,
             Major = request.Major ?? string.Empty,
             EnrollmentYear = request.EnrollmentYear ?? DateTime.UtcNow.Year,
-            AvatarUrl = $"https://api.dicebear.com/7.x/bottts/svg?seed={studentCode}"
+            AvatarUrl = !string.IsNullOrWhiteSpace(request.AvatarUrl)
+                ? request.AvatarUrl
+                : $"https://api.dicebear.com/7.x/bottts/svg?seed={studentCode}"
         };
 
         db.Students.Add(student);
@@ -451,6 +463,19 @@ public class AcademicController(AppDbContext db) : ControllerBase
 
         user.FullName = request.FullName.Trim();
         user.PhoneNumber = request.PhoneNumber;
+
+        if (!string.IsNullOrWhiteSpace(request.StudentCode))
+        {
+            var newCode = request.StudentCode.Trim().ToUpperInvariant();
+            if (student.StudentCode != newCode)
+            {
+                if (await db.Students.AnyAsync(s => s.StudentCode == newCode && s.UserId != student.UserId, ct))
+                {
+                    return Conflict($"Mã sinh viên '{newCode}' đã được sử dụng bởi sinh viên khác.");
+                }
+                student.StudentCode = newCode;
+            }
+        }
 
         if (IsAdmin && request.IsActive.HasValue)
         {

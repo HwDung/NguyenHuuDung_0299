@@ -77,6 +77,7 @@ namespace NguyenHuuDung_0299.Models.Academic
         [Required, EmailAddress]
         public required string Email { get; set; }
 
+        public string? StudentCode { get; set; }
         public string? PhoneNumber { get; set; }
         public string? Faculty { get; set; }
         public string? Major { get; set; }
