@@ -88,7 +88,16 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapGet("/", () => Results.Redirect("/swagger"));
 
-await DbInitializer.SeedAllAsync(app.Services);
+try
+{
+    await DbInitializer.SeedAllAsync(app.Services);
+}
+catch (Exception ex)
+{
+    var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Program");
+    logger.LogError(ex, "Lỗi xảy ra khi khởi tạo dữ liệu mẫu (SeedAllAsync).");
+}
 
 app.Run();
